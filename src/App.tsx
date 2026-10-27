@@ -143,8 +143,41 @@ export default function App() {
     if (!graph.nodes.some((node) => node.id === destinationId)) setDestinationId(graph.nodes.at(-1)?.id ?? '')
   }, [graph, originId, destinationId])
 
-  // Stop geolocation watcher on unmount
+  // Automatic high-accuracy Real-Time Geolocation on initial load
   useEffect(() => {
+    if (!navigator.geolocation) {
+      setGeoStatus('unsupported')
+      return
+    }
+
+    setGeoStatus('requesting')
+    setIsLiveTracking(true)
+
+    // Immediate fix
+    navigator.geolocation.getCurrentPosition(
+      (pos) => handlePositionSuccess(pos, true),
+      () => {
+        // Fallback or retry with lower precision if initial GPS lock fails
+        navigator.geolocation.getCurrentPosition(
+          (fallbackPos) => handlePositionSuccess(fallbackPos, true),
+          (fallbackErr) => handlePositionError(fallbackErr),
+          { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
+        )
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 },
+    )
+
+    // Continuous watchPosition for real-time tracking
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        handlePositionSuccess(pos, false)
+      },
+      (err) => {
+        handlePositionError(err)
+      },
+      { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 },
+    )
+
     return () => {
       if (watchIdRef.current !== null) {
         navigator.geolocation.clearWatch(watchIdRef.current)
@@ -163,7 +196,7 @@ export default function App() {
 
   const notify = (message: string) => setToast(message)
 
-  const handlePositionSuccess = (position: GeolocationPosition, snapOrigin = true) => {
+  const handlePositionSuccess = (position: GeolocationPosition, snapOrigin = false) => {
     const nextLoc: BrowserLocation = {
       lat: position.coords.latitude,
       lng: position.coords.longitude,
@@ -174,8 +207,16 @@ export default function App() {
     setUserLocation(nextLoc)
     setGeoStatus('granted')
 
+    // Always center the active network graph directly on the real user coordinates!
+    setCenter((prev) => {
+      // Re-center if difference is noticeable
+      if (Math.abs(prev.lat - nextLoc.lat) > 0.0001 || Math.abs(prev.lng - nextLoc.lng) > 0.0001) {
+        return { lat: nextLoc.lat, lng: nextLoc.lng }
+      }
+      return prev
+    })
+
     if (snapOrigin) {
-      setCenter({ lat: nextLoc.lat, lng: nextLoc.lng })
       const recenteredGraph = createDemoGraph({ lat: nextLoc.lat, lng: nextLoc.lng }, preset)
       let nearestNode: (typeof recenteredGraph.nodes)[number] | undefined
       let nearestDistance = Number.POSITIVE_INFINITY
@@ -195,9 +236,12 @@ export default function App() {
   }
 
   const handlePositionError = (error: GeolocationPositionError) => {
-    if (error.code === error.PERMISSION_DENIED) setGeoStatus('denied')
-    else setGeoStatus('error')
-    notify(error.code === error.PERMISSION_DENIED ? 'Location permission denied by browser.' : 'Unable to acquire real GPS fix.')
+    if (error.code === error.PERMISSION_DENIED) {
+      setGeoStatus('denied')
+      notify('GPS permission denied. Enable browser location for real-time map syncing.')
+    } else {
+      setGeoStatus('error')
+    }
   }
 
   // Request single GPS fix
@@ -210,8 +254,14 @@ export default function App() {
     setGeoStatus('requesting')
     navigator.geolocation.getCurrentPosition(
       (pos) => handlePositionSuccess(pos, true),
-      handlePositionError,
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
+      () => {
+        navigator.geolocation.getCurrentPosition(
+          (fallbackPos) => handlePositionSuccess(fallbackPos, true),
+          handlePositionError,
+          { enableHighAccuracy: false, timeout: 8000 },
+        )
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 },
     )
   }
 
@@ -232,7 +282,14 @@ export default function App() {
     } else {
       setIsLiveTracking(true)
       setGeoStatus('requesting')
-      notify('Initiating real-time GPS positioning...')
+      notify('Initiating real-time GPS tracking stream...')
+
+      // Trigger immediate update
+      navigator.geolocation.getCurrentPosition(
+        (pos) => handlePositionSuccess(pos, true),
+        () => {},
+        { enableHighAccuracy: true, timeout: 10000 },
+      )
 
       watchIdRef.current = navigator.geolocation.watchPosition(
         (pos) => {
@@ -242,7 +299,7 @@ export default function App() {
           handlePositionError(err)
           setIsLiveTracking(false)
         },
-        { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 },
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 },
       )
     }
   }

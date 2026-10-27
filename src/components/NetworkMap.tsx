@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Circle, CircleMarker, MapContainer, Pane, Polyline, Tooltip, useMap } from 'react-leaflet'
 import { Crosshair, Layers3, LocateFixed, Minus, Navigation, Plus } from 'lucide-react'
 import type { AnalysisView } from '../App'
@@ -33,27 +33,35 @@ const ROUTE_COLORS = ['#38bdf8', '#34d399', '#fbbf24', '#f43f5e']
 
 function SetView({ graph, userLocation, isTracking }: { graph: DemoGraph; userLocation: UserLocationState | null; isTracking: boolean }) {
   const map = useMap()
+  const initialFitRef = useRef(false)
 
+  // Follow real user location in real time whenever it moves or tracking is on
   useEffect(() => {
-    if (isTracking && userLocation) {
-      map.setView([userLocation.lat, userLocation.lng], Math.max(map.getZoom(), 16), { animate: true, duration: 0.8 })
-      return
-    }
-
-    const points = graph.nodes.map((node) => [node.lat, node.lng] as [number, number])
     if (userLocation) {
-      points.push([userLocation.lat, userLocation.lng])
+      if (isTracking) {
+        map.setView([userLocation.lat, userLocation.lng], Math.max(map.getZoom(), 16), { animate: true, duration: 0.6 })
+      } else if (!initialFitRef.current) {
+        initialFitRef.current = true
+        map.setView([userLocation.lat, userLocation.lng], 16, { animate: true, duration: 0.8 })
+      }
     }
-    if (points.length) {
-      map.fitBounds(points, {
-        paddingTopLeft: [48, 48],
-        paddingBottomRight: [64, 48],
-        maxZoom: 18,
-        animate: true,
-        duration: 0.8,
-      })
+  }, [userLocation, isTracking, map])
+
+  // Initial bounds fit on graph load
+  useEffect(() => {
+    if (!initialFitRef.current) {
+      const points = graph.nodes.map((node) => [node.lat, node.lng] as [number, number])
+      if (points.length) {
+        map.fitBounds(points, {
+          paddingTopLeft: [48, 48],
+          paddingBottomRight: [64, 48],
+          maxZoom: 18,
+          animate: true,
+          duration: 0.8,
+        })
+      }
     }
-  }, [graph.nodes, isTracking, map])
+  }, [graph.nodes, map])
 
   return null
 }

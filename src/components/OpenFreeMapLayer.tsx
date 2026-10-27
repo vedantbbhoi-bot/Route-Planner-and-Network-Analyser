@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useMap } from 'react-leaflet'
 import * as L from 'leaflet'
-import '@maplibre/maplibre-gl-leaflet'
+import { maplibreGL } from '@maplibre/maplibre-gl-leaflet'
 import { DEFAULT_OPENFREEMAP_STYLE, OSM_ATTRIBUTION, OSM_FALLBACK_URL } from '../data/mapTiles'
 
 interface OpenFreeMapLayerProps {
@@ -18,9 +18,8 @@ export default function OpenFreeMapLayer({ styleUrl = DEFAULT_OPENFREEMAP_STYLE 
     let fallbackTileLayer: L.TileLayer | null = null
 
     try {
-      // MapLibre GL Leaflet integration for OpenFreeMap (vector tiles, no API key required)
-      if (typeof (L as unknown as { maplibreGL?: (opts: unknown) => L.Layer }).maplibreGL === 'function') {
-        glLayer = (L as unknown as { maplibreGL: (opts: unknown) => L.Layer }).maplibreGL({
+      if (typeof maplibreGL === 'function') {
+        glLayer = (maplibreGL as unknown as (opts: Record<string, unknown>) => L.Layer)({
           style: styleUrl,
           attribution: OSM_ATTRIBUTION,
           interactive: false,
@@ -28,10 +27,9 @@ export default function OpenFreeMapLayer({ styleUrl = DEFAULT_OPENFREEMAP_STYLE 
         glLayer.addTo(map)
         layerRef.current = glLayer
       } else {
-        throw new Error('maplibreGL plugin not detected on Leaflet')
+        throw new Error('maplibreGL function unavailable')
       }
     } catch {
-      // Direct OpenStreetMap raster fallback (100% free, no API key)
       if (active) {
         fallbackTileLayer = L.tileLayer(OSM_FALLBACK_URL, {
           attribution: OSM_ATTRIBUTION,
