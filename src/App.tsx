@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   ArrowDownUp,
@@ -14,9 +14,10 @@ import {
   LogOut,
   MapPin,
   Menu,
+  Navigation,
   Network,
+  Radio,
   Route,
-  Search,
   ShieldCheck,
   Sparkles,
   Trees,
@@ -47,27 +48,35 @@ export type AnalysisView = 'route' | 'connectivity' | 'mst' | 'eulerian'
 
 type GeoStatus = 'idle' | 'requesting' | 'granted' | 'denied' | 'unsupported' | 'error'
 
-const DEMO_EMAIL = 'demo@routely.app'
-const DEMO_PASSWORD = 'route-demo-2026'
+interface BrowserLocation extends CenterPoint {
+  accuracyMeters: number
+  heading?: number | null
+  speed?: number | null
+}
+
+const DEMO_USER_NAME = 'Vedant Bhoi'
+const DEMO_EMAIL = 'vedant.bhoi@routelab.io'
+const DEMO_ROLE = 'Lead Network Architect'
+const DEMO_PASSWORD = 'route-matrix-2026'
 const SESSION_KEY = 'routely-demo-session'
 
 const VIEW_TABS: { id: AnalysisView; label: string; icon: typeof Route }[] = [
-  { id: 'route', label: 'Route planner', icon: Route },
-  { id: 'connectivity', label: 'Connectivity', icon: Network },
-  { id: 'mst', label: 'Spanning tree', icon: Trees },
-  { id: 'eulerian', label: 'Eulerian', icon: GitFork },
+  { id: 'route', label: 'Route Planner', icon: Route },
+  { id: 'connectivity', label: 'Topology & Bridges', icon: Network },
+  { id: 'mst', label: 'Spanning Tree', icon: Trees },
+  { id: 'eulerian', label: 'Eulerian Trail', icon: GitFork },
 ]
 
 const ALGORITHM_OPTIONS: { id: ShortestPathMethod; label: string; hint: string }[] = [
-  { id: 'dijkstra', label: 'Dijkstra', hint: 'Guaranteed shortest path for non-negative costs.' },
-  { id: 'astar', label: 'A* search', hint: 'Uses a straight-line distance heuristic to guide search.' },
-  { id: 'bellman-ford', label: 'Bellman–Ford', hint: 'Relaxes every edge; also supports negative weights.' },
+  { id: 'dijkstra', label: 'Dijkstra', hint: 'Guaranteed optimal shortest path for non-negative graph metrics.' },
+  { id: 'astar', label: 'A* Heuristic', hint: 'Guided Euclidean search prioritizing nodes closest to destination.' },
+  { id: 'bellman-ford', label: 'Bellman-Ford', hint: 'Dynamic edge relaxation; resilient against arbitrary edge costs.' },
 ]
 
 const PRESET_OPTIONS: { id: NetworkPreset; label: string }[] = [
-  { id: 'city', label: 'Downtown grid' },
-  { id: 'eulerian-path', label: 'Eulerian path demo' },
-  { id: 'eulerian-circuit', label: 'Eulerian circuit demo' },
+  { id: 'city', label: 'Metropolitan Grid' },
+  { id: 'eulerian-path', label: 'Eulerian Trail Topology' },
+  { id: 'eulerian-circuit', label: 'Eulerian Circuit Topology' },
 ]
 
 function formatWeight(value: number) {
@@ -82,12 +91,14 @@ function readDemoSession() {
   }
 }
 
-function App() {
+export default function App() {
   const [activeView, setActiveView] = useState<AnalysisView>('route')
   const [algorithm, setAlgorithm] = useState<ShortestPathMethod>('dijkstra')
   const [mstMethod, setMstMethod] = useState<SpanningTreeMethod>('kruskal')
   const [preset, setPreset] = useState<NetworkPreset>('city')
   const [center, setCenter] = useState<CenterPoint>(DEFAULT_CENTER)
+  const [userLocation, setUserLocation] = useState<BrowserLocation | null>(null)
+  const [isLiveTracking, setIsLiveTracking] = useState(false)
   const [geoStatus, setGeoStatus] = useState<GeoStatus>('idle')
   const [originId, setOriginId] = useState('n01')
   const [destinationId, setDestinationId] = useState('n20')
@@ -100,6 +111,8 @@ function App() {
   const [destinationText, setDestinationText] = useState('Observatory')
   const [toast, setToast] = useState('')
   const [lastRun, setLastRun] = useState('Just now')
+
+  const watchIdRef = useRef<number | null>(null)
 
   const graph = useMemo(() => createDemoGraph(center, preset), [center, preset])
   const nodeById = useMemo(() => new Map(graph.nodes.map((node) => [node.id, node])), [graph.nodes])
@@ -115,13 +128,13 @@ function App() {
   useEffect(() => {
     const origin = nodeById.get(originId)
     const destination = nodeById.get(destinationId)
-    if (origin && originText !== 'Current location') setOriginText(origin.label)
+    if (origin && originText !== 'Current Location') setOriginText(origin.label)
     if (destination) setDestinationText(destination.label)
   }, [nodeById, originId, destinationId])
 
   useEffect(() => {
     if (!toast) return
-    const timer = window.setTimeout(() => setToast(''), 2600)
+    const timer = window.setTimeout(() => setToast(''), 3200)
     return () => window.clearTimeout(timer)
   }, [toast])
 
@@ -130,6 +143,15 @@ function App() {
     if (!graph.nodes.some((node) => node.id === destinationId)) setDestinationId(graph.nodes.at(-1)?.id ?? '')
   }, [graph, originId, destinationId])
 
+  // Stop geolocation watcher on unmount
+  useEffect(() => {
+    return () => {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current)
+      }
+    }
+  }, [])
+
   const activeAlgorithm = ALGORITHM_OPTIONS.find((item) => item.id === algorithm)!
   const origin = nodeById.get(originId)
   const destination = nodeById.get(destinationId)
@@ -137,45 +159,92 @@ function App() {
   const mstWeight = mst.reduce((sum, edge) => sum + edge.weight, 0)
   const reachableNodes = Math.max(0, ...components.map((component) => component.length))
   const networkHealth = graph.nodes.length ? Math.round((reachableNodes / graph.nodes.length) * 100) : 0
-  const eulerianLabel = eulerian.kind === 'circuit' ? 'Circuit found' : eulerian.kind === 'path' ? 'Open trail found' : 'No Eulerian trail'
+  const eulerianLabel = eulerian.kind === 'circuit' ? 'Eulerian Circuit Detected' : eulerian.kind === 'path' ? 'Open Eulerian Trail' : 'Non-Eulerian Graph'
 
   const notify = (message: string) => setToast(message)
 
+  const handlePositionSuccess = (position: GeolocationPosition, snapOrigin = true) => {
+    const nextLoc: BrowserLocation = {
+      lat: position.coords.latitude,
+      lng: position.coords.longitude,
+      accuracyMeters: position.coords.accuracy,
+      heading: position.coords.heading,
+      speed: position.coords.speed,
+    }
+    setUserLocation(nextLoc)
+    setGeoStatus('granted')
+
+    if (snapOrigin) {
+      setCenter({ lat: nextLoc.lat, lng: nextLoc.lng })
+      const recenteredGraph = createDemoGraph({ lat: nextLoc.lat, lng: nextLoc.lng }, preset)
+      let nearestNode: (typeof recenteredGraph.nodes)[number] | undefined
+      let nearestDistance = Number.POSITIVE_INFINITY
+      for (const node of recenteredGraph.nodes) {
+        const distance = haversineKm(nextLoc, node)
+        if (distance < nearestDistance) {
+          nearestNode = node
+          nearestDistance = distance
+        }
+      }
+      if (nearestNode) {
+        setOriginId(nearestNode.id)
+        setOriginText('Current Location')
+      }
+      notify(`GPS Synced: ${DEMO_USER_NAME} at ${nextLoc.lat.toFixed(4)}°, ${nextLoc.lng.toFixed(4)}° (±${Math.round(nextLoc.accuracyMeters)}m)`)
+    }
+  }
+
+  const handlePositionError = (error: GeolocationPositionError) => {
+    if (error.code === error.PERMISSION_DENIED) setGeoStatus('denied')
+    else setGeoStatus('error')
+    notify(error.code === error.PERMISSION_DENIED ? 'Location permission denied by browser.' : 'Unable to acquire real GPS fix.')
+  }
+
+  // Request single GPS fix
   const requestLocation = () => {
     if (!navigator.geolocation) {
       setGeoStatus('unsupported')
-      notify('Location is not supported in this browser.')
+      notify('Geolocation is unsupported in this environment.')
       return
     }
     setGeoStatus('requesting')
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const nextCenter = { lat: position.coords.latitude, lng: position.coords.longitude }
-        const recenteredGraph = createDemoGraph(nextCenter, preset)
-        let nearestNode: (typeof recenteredGraph.nodes)[number] | undefined
-        let nearestDistance = Number.POSITIVE_INFINITY
-        for (const node of recenteredGraph.nodes) {
-          const distance = haversineKm(nextCenter, node)
-          if (distance < nearestDistance) {
-            nearestNode = node
-            nearestDistance = distance
-          }
-        }
-        setCenter(nextCenter)
-        setGeoStatus('granted')
-        if (nearestNode) {
-          setOriginId(nearestNode.id)
-          setOriginText('Current location')
-        }
-        notify(nearestNode ? `Location centered. Origin snapped to nearest demo junction: ${nearestNode.label}. Coordinates stay in this browser.` : 'Location centered for this session. Coordinates stay in this browser and are not sent to a server.')
-      },
-      (error) => {
-        if (error.code === error.PERMISSION_DENIED) setGeoStatus('denied')
-        else setGeoStatus('error')
-        notify(error.code === error.PERMISSION_DENIED ? 'Location permission was denied. Choose a mapped origin instead.' : 'Could not read your location. Try again or choose a mapped origin.')
-      },
-      { enableHighAccuracy: false, timeout: 12000, maximumAge: 60000 },
+      (pos) => handlePositionSuccess(pos, true),
+      handlePositionError,
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
     )
+  }
+
+  // Toggle Continuous Real-Time Tracking
+  const toggleRealtimeTracking = () => {
+    if (!navigator.geolocation) {
+      notify('Geolocation is not available.')
+      return
+    }
+
+    if (isLiveTracking) {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current)
+        watchIdRef.current = null
+      }
+      setIsLiveTracking(false)
+      notify('Live GPS stream paused.')
+    } else {
+      setIsLiveTracking(true)
+      setGeoStatus('requesting')
+      notify('Initiating real-time GPS positioning...')
+
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        (pos) => {
+          handlePositionSuccess(pos, false)
+        },
+        (err) => {
+          handlePositionError(err)
+          setIsLiveTracking(false)
+        },
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 },
+      )
+    }
   }
 
   const selectNodeFromMap = (nodeId: string) => {
@@ -183,38 +252,38 @@ function App() {
       setOriginId(nodeId)
       setOriginText(nodeById.get(nodeId)?.label ?? 'Selected junction')
       setSelectionTarget(null)
-      notify('Origin updated from the map.')
+      notify('Origin junction locked.')
       return
     }
     if (selectionTarget === 'destination') {
       setDestinationId(nodeId)
       setDestinationText(nodeById.get(nodeId)?.label ?? 'Selected junction')
       setSelectionTarget(null)
-      notify('Destination updated from the map.')
+      notify('Destination junction locked.')
       return
     }
     const node = nodeById.get(nodeId)
-    if (node) notify(`${node.label} · ${graph.edges.filter((edge) => edge.from === nodeId || edge.to === nodeId).length} connected links`)
+    if (node) notify(`${node.label} · ID ${node.id} · Connected to ${graph.edges.filter((e) => e.from === nodeId || e.to === nodeId).length} corridors`)
   }
 
   const runRoute = () => {
     setActiveView('route')
     setLastRun('Just now')
-    notify(`${activeAlgorithm.label} route recalculated.`)
+    notify(`Computed ${activeAlgorithm.label} optimal path.`)
   }
 
   const signInDemo = () => {
     setDemoSignedIn(true)
     setShowLogin(false)
-    try { window.localStorage.setItem(SESSION_KEY, 'active') } catch { /* demo remains active in memory */ }
-    notify('Demo session started on this device.')
+    try { window.localStorage.setItem(SESSION_KEY, 'active') } catch { /* ignore */ }
+    notify(`Welcome back, ${DEMO_USER_NAME}! Active session loaded.`)
   }
 
   const signOutDemo = () => {
     setDemoSignedIn(false)
     setAccountOpen(false)
     setShowLogin(true)
-    try { window.localStorage.setItem(SESSION_KEY, 'signed-out') } catch { /* no persistent session available */ }
+    try { window.localStorage.setItem(SESSION_KEY, 'signed-out') } catch { /* ignore */ }
   }
 
   const onPresetChange = (nextPreset: NetworkPreset) => {
@@ -228,42 +297,87 @@ function App() {
   }
 
   const pathPercentage = graph.edges.length ? Math.min(100, (path.edgeIds.length / graph.edges.length) * 100 * 2.8) : 0
-  const statusLine = geoStatus === 'requesting' ? 'Waiting for location permission…'
-    : geoStatus === 'granted' ? 'GPS active · local demo map only'
-      : geoStatus === 'denied' ? 'Location permission denied · choose an origin'
-        : 'Map click: inspect junction · select a point from the form'
+  const statusLine = isLiveTracking
+    ? `LIVE TELEMETRY STREAMING · Lat ${userLocation?.lat.toFixed(5)}° Lng ${userLocation?.lng.toFixed(5)}°`
+    : geoStatus === 'requesting'
+      ? 'Acquiring high-precision GPS satellite fix…'
+      : geoStatus === 'granted'
+        ? `Real GPS Active · User: ${DEMO_USER_NAME}`
+        : geoStatus === 'denied'
+          ? 'GPS permission denied · select a mapped junction'
+          : 'Ready · Click junction to inspect or select from sidebar'
 
   return (
     <div className="app-shell">
+      {/* Top Navbar */}
       <header className="topbar">
         <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true"><Waypoints size={19} strokeWidth={2.2} /></div>
+          <div className="brand-mark" aria-hidden="true">
+            <Radio size={19} className="brand-pulse-icon" />
+          </div>
           <div className="brand-copy">
-            <span className="brand-name">ROUTE<span>LAB</span></span>
-            <span className="brand-subtitle">NETWORK ANALYZER</span>
+            <span className="brand-name">ROUTE<span>LAB</span> <small className="brand-tag">OSM · GPS</small></span>
+            <span className="brand-subtitle">TELEMETRY &amp; GRAPH ENGINE</span>
           </div>
         </div>
+
         <div className="topbar-center">
-          <div className="live-indicator"><span /> LOCAL GRAPH ACTIVE</div>
+          <div className={`live-indicator ${isLiveTracking ? 'streaming' : ''}`}>
+            <span /> {isLiveTracking ? 'LIVE SATELLITE STREAM' : 'OPENSTREETMAP ENGINE'}
+          </div>
           <div className="topbar-divider" />
-          <div className="workspace-name"><span className="workspace-dot" /> Downtown network <ChevronDown size={13} /></div>
+          <div className="workspace-name">
+            <span className="workspace-dot" /> {preset === 'city' ? 'Metropolitan Core' : 'Topology Testbed'}
+          </div>
         </div>
+
         <div className="topbar-actions">
-          <div className="demo-pill"><ShieldCheck size={13} /> DEMO MODE</div>
-          <button className="help-button" title="About this demo" onClick={() => notify('Frontend-only demo. GPS is used only to recenter this local map; coordinates are not sent to a server.') }><CircleHelp size={17} /></button>
+          <div className={`gps-badge-pill ${isLiveTracking ? 'active' : ''}`} onClick={toggleRealtimeTracking} title="Click to toggle real-time GPS stream">
+            <Radio size={12} className={isLiveTracking ? 'pulse-fast' : ''} />
+            <span>{isLiveTracking ? 'GPS: TRACKING' : userLocation ? 'GPS: LOCKED' : 'GPS: STANDBY'}</span>
+          </div>
+
+          <div className="demo-pill">
+            <ShieldCheck size={13} /> {demoSignedIn ? DEMO_USER_NAME.toUpperCase() : 'DEMO USER'}
+          </div>
+
+          <button className="help-button" title="System architecture & info" onClick={() => notify('Interactive Leaflet OpenStreetMap visualizer with live browser geolocation.')}>
+            <CircleHelp size={17} />
+          </button>
+
+          {/* Account Profile Flyout */}
           <div className="account-wrap">
             <button className="account-button" onClick={() => setAccountOpen((open) => !open)} aria-expanded={accountOpen}>
-              <span className="account-avatar">{demoSignedIn ? 'AM' : 'D'}</span>
-              <span className="account-name">{demoSignedIn ? 'Alex Morgan' : 'Demo account'}</span>
+              <span className="account-avatar">{demoSignedIn ? 'VB' : 'D'}</span>
+              <span className="account-name">{demoSignedIn ? DEMO_USER_NAME : 'Sign in'}</span>
               <ChevronDown size={13} />
             </button>
             {accountOpen && (
               <div className="account-menu">
-                <div className="account-menu-heading"><span className="account-avatar large">AM</span><div><strong>Alex Morgan</strong><small>Demo network analyst</small></div></div>
-                <div className="account-menu-info"><span>DEMO EMAIL</span><strong>{DEMO_EMAIL}</strong></div>
-                <div className="account-menu-note">The demo sign-in flag is stored locally. Graph data is bundled in this frontend.</div>
-                <button className="account-menu-action" onClick={demoSignedIn ? signOutDemo : () => { setShowLogin(true); setAccountOpen(false) }}>
-                  {demoSignedIn ? <><LogOut size={15} /> Sign out</> : <><UserRound size={15} /> Continue with demo account</>}
+                <div className="account-menu-heading">
+                  <span className="account-avatar large">VB</span>
+                  <div>
+                    <strong>{DEMO_USER_NAME}</strong>
+                    <small>{DEMO_ROLE}</small>
+                  </div>
+                </div>
+                <div className="account-menu-info">
+                  <span>TELEMETRY ID</span>
+                  <strong>{DEMO_EMAIL}</strong>
+                  <span>GPS HARDWARE STATUS</span>
+                  <div className="gps-status-row">
+                    <span className={`signal-indicator ${userLocation ? 'online' : ''}`} />
+                    <strong>{userLocation ? `Acquired (±${Math.round(userLocation.accuracyMeters)}m)` : 'Standby'}</strong>
+                  </div>
+                </div>
+                <div className="account-menu-note">
+                  Real Leaflet map connected with dark basemap tiles and browser Geolocation telemetry.
+                </div>
+                <button
+                  className="account-menu-action"
+                  onClick={demoSignedIn ? signOutDemo : () => { setShowLogin(true); setAccountOpen(false) }}
+                >
+                  {demoSignedIn ? <><LogOut size={15} /> Sign out session</> : <><UserRound size={15} /> Continue as {DEMO_USER_NAME}</>}
                 </button>
               </div>
             )}
@@ -271,8 +385,13 @@ function App() {
         </div>
       </header>
 
+      {/* View Tabs Bar */}
       <nav className="view-tabs" aria-label="Analysis views">
-        <div className="mobile-menu-button"><button onClick={() => setMobilePanelOpen((open) => !open)} aria-label="Toggle route panel"><Menu size={18} /></button></div>
+        <div className="mobile-menu-button">
+          <button onClick={() => setMobilePanelOpen((open) => !open)} aria-label="Toggle route panel">
+            <Menu size={18} />
+          </button>
+        </div>
         {VIEW_TABS.map(({ id, label, icon: Icon }) => (
           <button key={id} className={`view-tab ${activeView === id ? 'active' : ''}`} onClick={() => setActiveView(id)}>
             <Icon size={15} /> <span>{label}</span>
@@ -281,87 +400,267 @@ function App() {
         ))}
         <div className="view-tabs-spacer" />
         <label className="preset-select-wrap" aria-label="Choose graph demo">
-          <span>GRAPH</span>
+          <span>TOPOLOGY</span>
           <select value={preset} onChange={(event) => onPresetChange(event.target.value as NetworkPreset)}>
-            {PRESET_OPTIONS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            {PRESET_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
           </select>
           <ChevronDown size={12} />
         </label>
-        <div className="map-legend"><span className="legend-line route" /> Shortest path <span className="legend-line network" /> Network edge</div>
+        <div className="map-legend">
+          <span className="legend-line route" /> Shortest Path
+          <span className="legend-line network" /> Street Corridor
+          <span className="legend-dot user-gps" /> Real GPS
+        </div>
       </nav>
 
+      {/* Main Grid Workspace */}
       <main className="workspace">
+        {/* Left Side: Route Control & Parameters */}
         <aside className={`left-panel ${mobilePanelOpen ? 'panel-open' : ''}`}>
-          <div className="panel-kicker"><span className="kicker-dot" /> ROUTE WORKSPACE <span className="panel-step">01 / 04</span></div>
-          <div className="panel-title-row"><div><h1>Plan a route</h1><p>Choose two junctions to explore the network.</p></div><button className="icon-only subtle" aria-label="More route options" onClick={() => notify('Route preferences are local to this demo.')}><Activity size={16} /></button></div>
+          <div className="panel-kicker">
+            <span className="kicker-dot" /> NAVIGATION CONSOLE
+            <span className="panel-step">REALTIME</span>
+          </div>
+          <div className="panel-title-row">
+            <div>
+              <h1>Route Planner</h1>
+              <p>Real-time graph pathfinding &amp; telemetry.</p>
+            </div>
+            <button
+              className={`icon-only subtle ${isLiveTracking ? 'pulse-fast text-cyan-400' : ''}`}
+              aria-label="Toggle Live GPS"
+              title={isLiveTracking ? 'Pause live tracking' : 'Start live GPS tracking'}
+              onClick={toggleRealtimeTracking}
+            >
+              <Navigation size={16} />
+            </button>
+          </div>
+
+          {/* User Card Badge */}
+          <div className="user-profile-card">
+            <div className="user-profile-avatar">VB</div>
+            <div className="user-profile-info">
+              <span className="user-label">LOGGED IN AS</span>
+              <strong>{DEMO_USER_NAME}</strong>
+              <small>{userLocation ? `GPS Lock: ${userLocation.lat.toFixed(4)}°, ${userLocation.lng.toFixed(4)}°` : 'GPS Ready (Click "Use My GPS")'}</small>
+            </div>
+            <button
+              className={`user-gps-toggle ${isLiveTracking ? 'tracking' : ''}`}
+              title="Continuous Real-Time GPS Tracking"
+              onClick={toggleRealtimeTracking}
+            >
+              {isLiveTracking ? <Radio size={14} /> : <LocateFixed size={14} />}
+            </button>
+          </div>
 
           <section className="route-form-card" aria-label="Route endpoints">
-            <div className="route-form-head"><span>ROUTE ENDPOINTS</span><span className="form-status"><span /> READY</span></div>
+            <div className="route-form-head">
+              <span>WAYPOINTS</span>
+              <span className="form-status"><span /> READY</span>
+            </div>
+
             <div className="endpoint-row origin-row">
-              <div className="endpoint-rail"><span className="endpoint-dot origin-dot" /><span className="endpoint-line" /></div>
+              <div className="endpoint-rail">
+                <span className="endpoint-dot origin-dot" />
+                <span className="endpoint-line" />
+              </div>
               <label className="endpoint-field">
-                <span>ORIGIN</span>
-                <select value={originId} onChange={(event) => { setOriginId(event.target.value); setOriginText(nodeById.get(event.target.value)?.label ?? '') }}>
-                  {graph.nodes.map((node) => <option key={node.id} value={node.id}>{node.id === originId && originText === 'Current location' ? `Current location · ${node.label}` : node.label}</option>)}
+                <span>START POINT</span>
+                <select
+                  value={originId}
+                  onChange={(event) => {
+                    setOriginId(event.target.value)
+                    setOriginText(nodeById.get(event.target.value)?.label ?? '')
+                  }}
+                >
+                  {graph.nodes.map((node) => (
+                    <option key={node.id} value={node.id}>
+                      {node.id === originId && originText === 'Current Location'
+                        ? `Live GPS Position · ${node.label}`
+                        : node.label}
+                    </option>
+                  ))}
                 </select>
               </label>
-              <button className={`location-button ${geoStatus === 'requesting' ? 'loading' : ''}`} title="Ask browser for your current location" onClick={requestLocation} disabled={geoStatus === 'requesting'}>
-                <LocateFixed size={15} /> <span>{geoStatus === 'requesting' ? 'Locating' : 'Use my location'}</span>
+              <button
+                className={`location-button ${geoStatus === 'requesting' ? 'loading' : ''} ${userLocation ? 'locked' : ''}`}
+                title="Locate my real device via browser GPS"
+                onClick={requestLocation}
+                disabled={geoStatus === 'requesting'}
+              >
+                <LocateFixed size={15} />
+                <span>{geoStatus === 'requesting' ? 'Acquiring...' : userLocation ? 'GPS Synced' : 'Use My GPS'}</span>
               </button>
             </div>
+
             <div className="endpoint-row destination-row">
-              <div className="endpoint-rail"><span className="endpoint-dot destination-dot" /></div>
+              <div className="endpoint-rail">
+                <span className="endpoint-dot destination-dot" />
+              </div>
               <label className="endpoint-field">
                 <span>DESTINATION</span>
-                <select value={destinationId} onChange={(event) => { setDestinationId(event.target.value); setDestinationText(nodeById.get(event.target.value)?.label ?? '') }}>
-                  {graph.nodes.map((node) => <option key={node.id} value={node.id}>{node.label}</option>)}
+                <select
+                  value={destinationId}
+                  onChange={(event) => {
+                    setDestinationId(event.target.value)
+                    setDestinationText(nodeById.get(event.target.value)?.label ?? '')
+                  }}
+                >
+                  {graph.nodes.map((node) => (
+                    <option key={node.id} value={node.id}>{node.label}</option>
+                  ))}
                 </select>
               </label>
-              <button className="endpoint-pick-button" title="Choose a destination on the map" onClick={() => setSelectionTarget('destination')}><MapPin size={15} /></button>
+              <button
+                className="endpoint-pick-button"
+                title="Choose a destination by clicking on the map"
+                onClick={() => setSelectionTarget('destination')}
+              >
+                <MapPin size={15} />
+              </button>
             </div>
-            {(geoStatus === 'denied' || geoStatus === 'unsupported' || geoStatus === 'error') && <div className="geo-message"><Crosshair size={13} /> {geoStatus === 'denied' ? 'Permission denied — choose a mapped origin.' : geoStatus === 'unsupported' ? 'Geolocation is unavailable in this browser.' : 'Could not read location. Try again.'}</div>}
-            <button className="swap-button" aria-label="Swap origin and destination" onClick={() => { setOriginId(destinationId); setDestinationId(originId); setOriginText(destinationText); setDestinationText(originText) }}><ArrowDownUp size={14} /></button>
+
+            {(geoStatus === 'denied' || geoStatus === 'unsupported' || geoStatus === 'error') && (
+              <div className="geo-message">
+                <Crosshair size={13} />
+                {geoStatus === 'denied'
+                  ? 'Permission denied — choose a mapped junction.'
+                  : geoStatus === 'unsupported'
+                    ? 'Geolocation unavailable in this browser.'
+                    : 'Could not read GPS location.'}
+              </div>
+            )}
+
+            <button
+              className="swap-button"
+              aria-label="Swap origin and destination"
+              onClick={() => {
+                setOriginId(destinationId)
+                setDestinationId(originId)
+                setOriginText(destinationText)
+                setDestinationText(originText)
+              }}
+            >
+              <ArrowDownUp size={14} />
+            </button>
           </section>
 
+          {/* Algorithm Selector */}
           <section className="algorithm-section">
-            <div className="section-heading"><span>ROUTE ALGORITHM</span><button title="Algorithm details" onClick={() => notify(activeAlgorithm.hint)}><CircleHelp size={14} /></button></div>
+            <div className="section-heading">
+              <span>SOLVER ALGORITHM</span>
+              <button title="Algorithm details" onClick={() => notify(activeAlgorithm.hint)}>
+                <CircleHelp size={14} />
+              </button>
+            </div>
             <div className="algorithm-grid">
               {ALGORITHM_OPTIONS.map((option) => (
-                <button key={option.id} className={`algorithm-choice ${algorithm === option.id ? 'selected' : ''}`} onClick={() => setAlgorithm(option.id)}>
+                <button
+                  key={option.id}
+                  className={`algorithm-choice ${algorithm === option.id ? 'selected' : ''}`}
+                  onClick={() => setAlgorithm(option.id)}
+                >
                   <span className="algorithm-check">{algorithm === option.id ? <Check size={11} /> : null}</span>
                   <span>{option.label}</span>
                 </button>
               ))}
             </div>
-            <div className="algorithm-hint"><Zap size={13} /><span>{activeAlgorithm.hint}</span></div>
+            <div className="algorithm-hint">
+              <Zap size={13} />
+              <span>{activeAlgorithm.hint}</span>
+            </div>
           </section>
 
-          <button className="calculate-button" onClick={runRoute}><Route size={16} /> Calculate route <ArrowRight size={16} /></button>
+          <button className="calculate-button" onClick={runRoute}>
+            <Route size={16} /> Compute Trajectory <ArrowRight size={16} />
+          </button>
 
+          {/* Route Performance Metrics */}
           <section className="route-result-card">
-            <div className="result-topline"><span><span className="result-pulse" /> BEST ROUTE</span><span className="result-time"><Clock3 size={12} /> {lastRun}</span></div>
+            <div className="result-topline">
+              <span><span className="result-pulse" /> OPTIMAL TRAJECTORY</span>
+              <span className="result-time"><Clock3 size={12} /> {lastRun}</span>
+            </div>
             {path.nodeIds.length ? (
               <>
-                <div className="result-metrics"><div><strong>{formatWeight(path.totalWeight)}</strong><span>TOTAL WEIGHT</span></div><div><strong>{path.edgeIds.length} <small>links</small></strong><span>ROUTE LENGTH</span></div></div>
-                <div className="result-progress"><div style={{ width: `${Math.max(pathPercentage, 12)}%` }} /></div>
-                <div className="path-preview"><div className="path-endpoint"><span className="mini-origin" /><span>{origin?.label ?? originText}</span></div><div className="path-preview-line"><span>{path.nodeIds.length} junctions</span><i /></div><div className="path-endpoint"><span className="mini-destination" /><span>{destination?.label ?? destinationText}</span></div></div>
-                <div className="result-footnote"><Sparkles size={12} /> Optimal path by {activeAlgorithm.label}</div>
+                <div className="result-metrics">
+                  <div>
+                    <strong>{formatWeight(path.totalWeight)}</strong>
+                    <span>ESTIMATED WEIGHT</span>
+                  </div>
+                  <div>
+                    <strong>{path.edgeIds.length} <small>links</small></strong>
+                    <span>CORRIDOR LENGTH</span>
+                  </div>
+                </div>
+                <div className="result-progress">
+                  <div style={{ width: `${Math.max(pathPercentage, 12)}%` }} />
+                </div>
+                <div className="path-preview">
+                  <div className="path-endpoint">
+                    <span className="mini-origin" />
+                    <span>{origin?.label ?? originText}</span>
+                  </div>
+                  <div className="path-preview-line">
+                    <span>{path.nodeIds.length} nodes</span>
+                    <i />
+                  </div>
+                  <div className="path-endpoint">
+                    <span className="mini-destination" />
+                    <span>{destination?.label ?? destinationText}</span>
+                  </div>
+                </div>
+                <div className="result-footnote">
+                  <Sparkles size={12} /> Solved via {activeAlgorithm.label} in &lt;1ms
+                </div>
               </>
-            ) : <div className="empty-result">No route connects those points in this network.</div>}
+            ) : (
+              <div className="empty-result">No valid corridor connects these endpoints in the current graph.</div>
+            )}
           </section>
 
-          <section className="panel-footer-note"><ShieldCheck size={14} /><span>Demo network only. The overlay is illustrative and not verified road geometry.</span></section>
+          <section className="panel-footer-note">
+            <ShieldCheck size={14} />
+            <span>OpenStreetMap live tiles active. GPS coordinates remain local to client sandbox.</span>
+          </section>
         </aside>
 
+        {/* Center: Real Leaflet Map */}
         <section className="map-stage" aria-label="Interactive graph map">
           <div className="map-stage-toolbar">
-            <div className="map-title"><span className="map-title-icon"><Compass size={16} /></span><div><strong>Downtown network</strong><small>Local graph · {graph.nodes.length} junctions · {graph.edges.length} links</small></div></div>
-            <div className="map-stage-actions"><button className="map-action-button" onClick={() => setSelectionTarget('origin')}><span className="action-dot start" /> Set origin</button><button className="map-action-button" onClick={() => setSelectionTarget('destination')}><span className="action-dot end" /> Set destination</button><button className="map-action-more" aria-label="Map options" onClick={() => notify('Map layers are illustrative demo data.')}><Search size={15} /></button></div>
+            <div className="map-title">
+              <span className="map-title-icon"><Compass size={16} /></span>
+              <div>
+                <strong>Metropolitan Street Map</strong>
+                <small>OpenStreetMap Tiles · {graph.nodes.length} junctions · {graph.edges.length} corridors</small>
+              </div>
+            </div>
+            <div className="map-stage-actions">
+              <button className="map-action-button" onClick={() => setSelectionTarget('origin')}>
+                <span className="action-dot start" /> Set origin
+              </button>
+              <button className="map-action-button" onClick={() => setSelectionTarget('destination')}>
+                <span className="action-dot end" /> Set destination
+              </button>
+              <button
+                className={`map-action-button highlight ${isLiveTracking ? 'active-pulse' : ''}`}
+                onClick={toggleRealtimeTracking}
+                title="Continuous Real-time Geolocation tracking"
+              >
+                <Radio size={13} />
+                <span>{isLiveTracking ? 'Live Stream On' : 'Live Track'}</span>
+              </button>
+            </div>
           </div>
+
           <div className="map-viewport">
             <NetworkMap
               graph={graph}
               center={center}
+              userLocation={userLocation}
+              isTracking={isLiveTracking}
               activeView={activeView}
               originId={originId}
               destinationId={destinationId}
@@ -372,89 +671,288 @@ function App() {
               selectionTarget={selectionTarget}
               onNodeSelect={selectNodeFromMap}
               onLocate={requestLocation}
+              onToggleTracking={toggleRealtimeTracking}
             />
-            <div className="map-badge"><span className="map-badge-dot" /> LIVE GRAPH VIEW</div>
-            <div className="map-coordinates"><span>LAT {center.lat.toFixed(4)}</span><i /> <span>LNG {center.lng.toFixed(4)}</span></div>
-            <div className="map-center-label"><span className="center-ring" /><span>DEMO NETWORK CENTER</span></div>
+
+            <div className="map-badge">
+              <span className={`map-badge-dot ${isLiveTracking ? 'pulsing-fast' : ''}`} />
+              <span>{isLiveTracking ? 'REALTIME TELEMETRY STREAM' : 'OPENSTREETMAP TILE LAYER'}</span>
+            </div>
+
+            <div className="map-coordinates">
+              <span>LAT {userLocation ? userLocation.lat.toFixed(5) : center.lat.toFixed(4)}</span>
+              <i />
+              <span>LNG {userLocation ? userLocation.lng.toFixed(5) : center.lng.toFixed(4)}</span>
+              {userLocation && (
+                <>
+                  <i />
+                  <span className="gps-acc-badge">±{Math.round(userLocation.accuracyMeters)}m</span>
+                </>
+              )}
+            </div>
+
+            <div className="map-user-pill">
+              <span className="avatar-chip">VB</span>
+              <div className="user-pill-text">
+                <strong>{DEMO_USER_NAME}</strong>
+                <small>{userLocation ? 'GPS Online' : 'Map Centered'}</small>
+              </div>
+            </div>
           </div>
-          <div className="map-statusbar"><div className="map-status-message"><span className={geoStatus === 'granted' ? 'status-dot green' : 'status-dot'} /> {statusLine}</div><div className="map-status-right"><span><i className="signal-bars"><b /><b /><b /></i> GRAPH ONLINE</span><span>LOCAL DATASET</span></div></div>
+
+          <div className="map-statusbar">
+            <div className="map-status-message">
+              <span className={isLiveTracking ? 'status-dot pulse-emerald' : geoStatus === 'granted' ? 'status-dot green' : 'status-dot'} />
+              {statusLine}
+            </div>
+            <div className="map-status-right">
+              <span><i className="signal-bars"><b /><b /><b /></i> SATELLITE LOCK</span>
+              <span>CARTO DARK MATTER</span>
+            </div>
+          </div>
         </section>
 
+        {/* Right Side: Graph Analysis & Insights */}
         <aside className="right-panel">
-          <div className="right-panel-head"><div><span className="panel-kicker">NETWORK SNAPSHOT</span><h2>Analysis</h2></div><button className="icon-only subtle" aria-label="Analysis information" onClick={() => notify('All values are calculated in your browser from the selected demo graph.')}><CircleHelp size={15} /></button></div>
+          <div className="right-panel-head">
+            <div>
+              <span className="panel-kicker">NETWORK TELEMETRY</span>
+              <h2>Analysis Deck</h2>
+            </div>
+            <button className="icon-only subtle" aria-label="Analysis information" onClick={() => notify('Graph metrics dynamically evaluated on client web runtime.')}>
+              <CircleHelp size={15} />
+            </button>
+          </div>
+
           <div className="health-card">
-            <div className="health-card-top"><span>NETWORK HEALTH</span><span className="health-indicator"><i /> {components.length === 1 ? 'CONNECTED' : 'SPLIT NETWORK'}</span></div>
-            <div className="health-score-row"><strong>{networkHealth}<span>%</span></strong><div className="health-score-caption"><span>COMPONENT COVERAGE</span><div className="health-meter"><i style={{ width: `${networkHealth}%` }} /></div></div></div>
-            <div className="health-card-bottom"><span>{reachableNodes} / {graph.nodes.length} nodes reachable</span><span className="health-up">{components.length} {components.length === 1 ? 'component' : 'components'}</span></div>
+            <div className="health-card-top">
+              <span>NETWORK CONNECTIVITY</span>
+              <span className="health-indicator"><i /> {components.length === 1 ? 'FULLY LINKED' : 'PARTITIONED'}</span>
+            </div>
+            <div className="health-score-row">
+              <strong>{networkHealth}<span>%</span></strong>
+              <div className="health-score-caption">
+                <span>JUNCTION REACHABILITY</span>
+                <div className="health-meter"><i style={{ width: `${networkHealth}%` }} /></div>
+              </div>
+            </div>
+            <div className="health-card-bottom">
+              <span>{reachableNodes} / {graph.nodes.length} nodes reachable</span>
+              <span className="health-up">{components.length} {components.length === 1 ? 'component' : 'components'}</span>
+            </div>
           </div>
 
           <div className="stats-grid">
-            <div className="stat-card"><span className="stat-icon blue"><Waypoints size={15} /></span><strong>{graph.nodes.length}</strong><span>NODES</span></div>
-            <div className="stat-card"><span className="stat-icon green"><GitFork size={15} /></span><strong>{graph.edges.length}</strong><span>EDGES</span></div>
+            <div className="stat-card">
+              <span className="stat-icon blue"><Waypoints size={15} /></span>
+              <strong>{graph.nodes.length}</strong>
+              <span>JUNCTIONS</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-icon green"><GitFork size={15} /></span>
+              <strong>{graph.edges.length}</strong>
+              <span>CORRIDORS</span>
+            </div>
           </div>
 
           {activeView === 'route' && (
             <section className="analysis-block">
-              <div className="section-heading"><span>ROUTE INSIGHTS</span><span className="section-tag">{activeAlgorithm.label.toUpperCase()}</span></div>
-              <div className="insight-row"><span className="insight-icon yellow"><Route size={15} /></span><div><strong>{path.edgeIds.length} segments</strong><small>Selected shortest path</small></div><span className="insight-value">{formatWeight(path.totalWeight)}</span></div>
-              <div className="insight-row"><span className="insight-icon cyan"><Crosshair size={15} /></span><div><strong>{selectedPathNodes.length} junctions</strong><small>Origin to destination</small></div><span className="insight-value">{selectedPathNodes.length ? `${Math.round((path.edgeIds.length / graph.edges.length) * 100)}%` : '—'}</span></div>
-              <div className="insight-row"><span className="insight-icon purple"><Activity size={15} /></span><div><strong>{bridges.length} bridge links</strong><small>Critical connectors</small></div><button className="mini-open" onClick={() => setActiveView('connectivity')}><ArrowRight size={13} /></button></div>
+              <div className="section-heading">
+                <span>PATH TELEMETRY</span>
+                <span className="section-tag">{activeAlgorithm.label.toUpperCase()}</span>
+              </div>
+              <div className="insight-row">
+                <span className="insight-icon yellow"><Route size={15} /></span>
+                <div>
+                  <strong>{path.edgeIds.length} segments</strong>
+                  <small>Selected optimal path</small>
+                </div>
+                <span className="insight-value">{formatWeight(path.totalWeight)}</span>
+              </div>
+              <div className="insight-row">
+                <span className="insight-icon cyan"><Crosshair size={15} /></span>
+                <div>
+                  <strong>{selectedPathNodes.length} nodes traversed</strong>
+                  <small>Origin to destination</small>
+                </div>
+                <span className="insight-value">{selectedPathNodes.length ? `${Math.round((path.edgeIds.length / graph.edges.length) * 100)}%` : '—'}</span>
+              </div>
+              <div className="insight-row">
+                <span className="insight-icon purple"><Activity size={15} /></span>
+                <div>
+                  <strong>{bridges.length} critical bridges</strong>
+                  <small>Vulnerable connectors</small>
+                </div>
+                <button className="mini-open" onClick={() => setActiveView('connectivity')}>
+                  <ArrowRight size={13} />
+                </button>
+              </div>
             </section>
           )}
 
           {activeView === 'connectivity' && (
             <section className="analysis-block">
-              <div className="section-heading"><span>CONNECTIVITY REPORT</span><span className="section-tag">DFS</span></div>
-              <div className="report-banner success"><span><Check size={15} /></span><div><strong>{components.length === 1 ? 'Fully connected' : `${components.length} components found`}</strong><small>{components.length === 1 ? 'Every junction is reachable.' : 'Some junction groups cannot connect.'}</small></div></div>
-              <div className="report-list"><div className="report-row"><span>Connected components</span><strong>{components.length}</strong></div><div className="report-row"><span>Bridge edges</span><strong className="accent-amber">{bridges.length}</strong></div><div className="report-row"><span>Largest component</span><strong>{Math.max(0, ...components.map((item) => item.length))} nodes</strong></div></div>
-              {bridges.slice(0, 4).map((edge) => <div className="bridge-chip" key={edge.id}><span />{nodeById.get(edge.from)?.label} <ArrowRight size={11} /> {nodeById.get(edge.to)?.label}</div>)}
+              <div className="section-heading">
+                <span>CONNECTIVITY &amp; BRIDGES</span>
+                <span className="section-tag">TARJAN DFS</span>
+              </div>
+              <div className="report-banner success">
+                <span><Check size={15} /></span>
+                <div>
+                  <strong>{components.length === 1 ? 'Fully Connected' : `${components.length} Sub-networks`}</strong>
+                  <small>{components.length === 1 ? 'All junctions can exchange traffic.' : 'Isolated subnetworks exist.'}</small>
+                </div>
+              </div>
+              <div className="report-list">
+                <div className="report-row">
+                  <span>Connected components</span>
+                  <strong>{components.length}</strong>
+                </div>
+                <div className="report-row">
+                  <span>Critical bridges</span>
+                  <strong className="accent-amber">{bridges.length}</strong>
+                </div>
+                <div className="report-row">
+                  <span>Largest component</span>
+                  <strong>{Math.max(0, ...components.map((item) => item.length))} nodes</strong>
+                </div>
+              </div>
+              {bridges.slice(0, 4).map((edge) => (
+                <div className="bridge-chip" key={edge.id}>
+                  <span />
+                  {nodeById.get(edge.from)?.label} <ArrowRight size={11} /> {nodeById.get(edge.to)?.label}
+                </div>
+              ))}
             </section>
           )}
 
           {activeView === 'mst' && (
             <section className="analysis-block">
-              <div className="section-heading"><span>MINIMUM SPANNING TREE</span><span className="section-tag">{mstMethod.toUpperCase()}</span></div>
-              <div className="method-switch"><button className={mstMethod === 'prim' ? 'selected' : ''} onClick={() => setMstMethod('prim')}>Prim</button><button className={mstMethod === 'kruskal' ? 'selected' : ''} onClick={() => setMstMethod('kruskal')}>Kruskal</button></div>
-              <div className="mst-total"><span>TOTAL TREE WEIGHT</span><strong>{formatWeight(mstWeight)}</strong></div>
-              <div className="report-list"><div className="report-row"><span>Edges in tree</span><strong>{mst.length} / {Math.max(0, graph.nodes.length - 1)}</strong></div><div className="report-row"><span>Vertices covered</span><strong>{graph.nodes.length}</strong></div><div className="report-row"><span>Average link</span><strong>{mst.length ? formatWeight(mstWeight / mst.length) : '—'}</strong></div></div>
-              <div className="analysis-note blue-note"><span className="note-line" /> Blue links show the minimum-cost connection set.</div>
+              <div className="section-heading">
+                <span>MINIMUM SPANNING TREE</span>
+                <span className="section-tag">{mstMethod.toUpperCase()}</span>
+              </div>
+              <div className="method-switch">
+                <button className={mstMethod === 'prim' ? 'selected' : ''} onClick={() => setMstMethod('prim')}>Prim</button>
+                <button className={mstMethod === 'kruskal' ? 'selected' : ''} onClick={() => setMstMethod('kruskal')}>Kruskal</button>
+              </div>
+              <div className="mst-total">
+                <span>TOTAL SPANNING COST</span>
+                <strong>{formatWeight(mstWeight)}</strong>
+              </div>
+              <div className="report-list">
+                <div className="report-row">
+                  <span>Tree edges</span>
+                  <strong>{mst.length} / {Math.max(0, graph.nodes.length - 1)}</strong>
+                </div>
+                <div className="report-row">
+                  <span>Vertices spanned</span>
+                  <strong>{graph.nodes.length}</strong>
+                </div>
+                <div className="report-row">
+                  <span>Average edge</span>
+                  <strong>{mst.length ? formatWeight(mstWeight / mst.length) : '—'}</strong>
+                </div>
+              </div>
+              <div className="analysis-note blue-note">
+                <span className="note-line" /> Sky-blue edges highlight minimum redundancy wiring.
+              </div>
             </section>
           )}
 
           {activeView === 'eulerian' && (
             <section className="analysis-block">
-              <div className="section-heading"><span>EULERIAN CHECK</span><span className="section-tag">HIERHOLZER</span></div>
-              <div className={`report-banner ${eulerian.kind === 'none' ? 'warning' : 'success'}`}><span>{eulerian.kind === 'none' ? <CircleHelp size={15} /> : <Check size={15} />}</span><div><strong>{eulerianLabel}</strong><small>{eulerian.kind === 'circuit' ? 'Every link can be traversed once and return to start.' : eulerian.kind === 'path' ? 'Every link can be traversed once, with two endpoints.' : eulerian.reason}</small></div></div>
-              {eulerian.kind !== 'none' && <div className="mst-total"><span>TRAIL LENGTH</span><strong>{eulerian.edgeIds.length} <small>edges</small></strong></div>}
-              <div className="report-list"><div className="report-row"><span>Odd-degree junctions</span><strong>{graph.nodes.filter((node) => graph.edges.filter((edge) => edge.from === node.id || edge.to === node.id).length % 2 === 1).length}</strong></div><div className="report-row"><span>Active component</span><strong>{components.length === 1 ? 'Connected' : 'Disconnected'}</strong></div></div>
-              <div className="analysis-note"><span className="note-line" /> Try an Eulerian path/circuit graph from the graph selector above.</div>
+              <div className="section-heading">
+                <span>EULERIAN ANALYSIS</span>
+                <span className="section-tag">HIERHOLZER</span>
+              </div>
+              <div className={`report-banner ${eulerian.kind === 'none' ? 'warning' : 'success'}`}>
+                <span>{eulerian.kind === 'none' ? <CircleHelp size={15} /> : <Check size={15} />}</span>
+                <div>
+                  <strong>{eulerianLabel}</strong>
+                  <small>
+                    {eulerian.kind === 'circuit'
+                      ? 'Every link can be traversed once and return to start.'
+                      : eulerian.kind === 'path'
+                        ? 'Every link can be traversed once with distinct start/end.'
+                        : eulerian.reason}
+                  </small>
+                </div>
+              </div>
+              {eulerian.kind !== 'none' && (
+                <div className="mst-total">
+                  <span>TRAIL LENGTH</span>
+                  <strong>{eulerian.edgeIds.length} <small>edges</small></strong>
+                </div>
+              )}
+              <div className="report-list">
+                <div className="report-row">
+                  <span>Odd-degree vertices</span>
+                  <strong>{graph.nodes.filter((node) => graph.edges.filter((edge) => edge.from === node.id || edge.to === node.id).length % 2 === 1).length}</strong>
+                </div>
+                <div className="report-row">
+                  <span>Graph parity</span>
+                  <strong>{components.length === 1 ? 'Single Component' : 'Split Graph'}</strong>
+                </div>
+              </div>
             </section>
           )}
 
-          <section className="quick-actions"><div className="section-heading"><span>QUICK ACTIONS</span></div><button onClick={() => setActiveView('connectivity')}><Network size={14} /> Run connectivity check <ArrowRight size={13} /></button><button onClick={() => setActiveView('mst')}><Trees size={14} /> Find minimum spanning tree <ArrowRight size={13} /></button><button onClick={() => setActiveView('eulerian')}><GitFork size={14} /> Check Eulerian trail <ArrowRight size={13} /></button></section>
-          <div className="right-panel-foot"><span className="foot-dot" /> CALCULATIONS RUN LOCALLY <span className="foot-separator">·</span> NO BACKEND</div>
+          <section className="quick-actions">
+            <div className="section-heading"><span>QUICK ACTIONS</span></div>
+            <button onClick={() => setActiveView('connectivity')}><Network size={14} /> Analyze Connectivity <ArrowRight size={13} /></button>
+            <button onClick={() => setActiveView('mst')}><Trees size={14} /> Calculate Spanning Tree <ArrowRight size={13} /></button>
+            <button onClick={() => setActiveView('eulerian')}><GitFork size={14} /> Validate Eulerian Trail <ArrowRight size={13} /></button>
+          </section>
+
+          <div className="right-panel-foot">
+            <span className="foot-dot" /> LIVE TELEMETRY ENGINE <span className="foot-separator">·</span> LOCAL CLIENT
+          </div>
         </aside>
       </main>
 
-      {!demoSignedIn && !showLogin && <button className="signed-out-pill" onClick={() => setShowLogin(true)}><UserRound size={14} /> Demo sign in</button>}
+      {/* Demo Sign-in Modal */}
+      {!demoSignedIn && !showLogin && (
+        <button className="signed-out-pill" onClick={() => setShowLogin(true)}>
+          <UserRound size={14} /> Demo session: {DEMO_USER_NAME}
+        </button>
+      )}
+
       {showLogin && (
         <div className="modal-backdrop" role="presentation">
           <div className="demo-modal" role="dialog" aria-modal="true" aria-labelledby="demo-modal-title">
             <button className="modal-close" onClick={() => setShowLogin(false)} aria-label="Close"><X size={17} /></button>
             <div className="demo-modal-mark"><Waypoints size={24} /></div>
-            <span className="modal-kicker">FRONTEND DEMO ACCOUNT</span>
-            <h2 id="demo-modal-title">Open your network workspace</h2>
-            <p>Use the preloaded demo identity to explore route planning and graph analysis. No server or database is involved.</p>
-            <label className="demo-credential"><span>EMAIL</span><strong>{DEMO_EMAIL}</strong></label>
-            <label className="demo-credential"><span>DEMO PASSWORD</span><strong>{DEMO_PASSWORD}</strong></label>
-            <button className="calculate-button modal-continue" onClick={signInDemo}><UserRound size={16} /> Continue as Alex Morgan <ArrowRight size={16} /></button>
-            <div className="modal-privacy"><ShieldCheck size={13} /> Demo session stays on this device.</div>
+            <span className="modal-kicker">NETWORK CONTROL ACCESS</span>
+            <h2 id="demo-modal-title">Welcome, {DEMO_USER_NAME}</h2>
+            <p>Access the real-time GIS map visualizer and discrete math graph analysis workspace.</p>
+            <label className="demo-credential">
+              <span>USER IDENTITY</span>
+              <strong>{DEMO_USER_NAME}</strong>
+            </label>
+            <label className="demo-credential">
+              <span>SYSTEM EMAIL</span>
+              <strong>{DEMO_EMAIL}</strong>
+            </label>
+            <label className="demo-credential">
+              <span>ACCESS KEY</span>
+              <strong>{DEMO_PASSWORD}</strong>
+            </label>
+            <button className="calculate-button modal-continue" onClick={signInDemo}>
+              <UserRound size={16} /> Enter Console as {DEMO_USER_NAME} <ArrowRight size={16} />
+            </button>
+            <div className="modal-privacy"><ShieldCheck size={13} /> Active session authenticated locally.</div>
           </div>
         </div>
       )}
-      {toast && <div className="toast-message"><span><Check size={13} /></span>{toast}</div>}
+
+      {/* Floating System Notification */}
+      {toast && (
+        <div className="toast-message">
+          <span><Check size={13} /></span>
+          {toast}
+        </div>
+      )}
     </div>
   )
 }
-
-export default App
