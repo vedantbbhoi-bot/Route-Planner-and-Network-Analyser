@@ -316,14 +316,14 @@ export default function App() {
             <Radio size={19} className="brand-pulse-icon" />
           </div>
           <div className="brand-copy">
-            <span className="brand-name">ROUTE<span>LAB</span> <small className="brand-tag">OSM · GPS</small></span>
+            <span className="brand-name">ROUTE<span>LAB</span> <small className="brand-tag">OPENFREEMAP · GPS</small></span>
             <span className="brand-subtitle">TELEMETRY &amp; GRAPH ENGINE</span>
           </div>
         </div>
 
         <div className="topbar-center">
           <div className={`live-indicator ${isLiveTracking ? 'streaming' : ''}`}>
-            <span /> {isLiveTracking ? 'LIVE SATELLITE STREAM' : 'OPENSTREETMAP ENGINE'}
+            <span /> {isLiveTracking ? 'LIVE SATELLITE STREAM' : 'OPENFREEMAP ENGINE'}
           </div>
           <div className="topbar-divider" />
           <div className="workspace-name">
@@ -676,7 +676,7 @@ export default function App() {
 
             <div className="map-badge">
               <span className={`map-badge-dot ${isLiveTracking ? 'pulsing-fast' : ''}`} />
-              <span>{isLiveTracking ? 'REALTIME TELEMETRY STREAM' : 'OPENSTREETMAP TILE LAYER'}</span>
+              <span>{isLiveTracking ? 'REALTIME TELEMETRY STREAM' : 'OPENFREEMAP VECTOR LAYER'}</span>
             </div>
 
             <div className="map-coordinates">
@@ -707,7 +707,7 @@ export default function App() {
             </div>
             <div className="map-status-right">
               <span><i className="signal-bars"><b /><b /><b /></i> SATELLITE LOCK</span>
-              <span>CARTO DARK MATTER</span>
+              <span>OPENFREEMAP (NO KEY REQUIRED)</span>
             </div>
           </div>
         </section>

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Circle, CircleMarker, MapContainer, Pane, Polyline, TileLayer, Tooltip, useMap } from 'react-leaflet'
+import { Circle, CircleMarker, MapContainer, Pane, Polyline, Tooltip, useMap } from 'react-leaflet'
 import { Crosshair, Layers3, LocateFixed, Minus, Navigation, Plus } from 'lucide-react'
 import type { AnalysisView } from '../App'
 import type { CenterPoint, DemoGraph } from '../data/demoGraph'
-import { MAP_TILE_ATTRIBUTION, MAP_TILE_URL } from '../data/mapTiles'
+import OpenFreeMapLayer from './OpenFreeMapLayer'
 
 interface UserLocationState extends CenterPoint {
   accuracyMeters: number
@@ -154,13 +154,8 @@ export default function NetworkMap({
     >
       <SetView graph={graph} userLocation={userLocation} isTracking={isTracking} />
       
-      {/* Real Map Tiles (OpenStreetMap / Carto Dark Matter) */}
-      <TileLayer
-        url={MAP_TILE_URL}
-        attribution={MAP_TILE_ATTRIBUTION}
-        maxZoom={19}
-        subdomains="abcd"
-      />
+      {/* Real Map Tiles (OpenFreeMap: 100% Free, No API Key, No Tracking) */}
+      <OpenFreeMapLayer />
 
       <Pane name="street-grid-overlay" style={{ zIndex: 350, pointerEvents: 'none' }}>
         <div className={`map-grid-overlay ${gridEnabled ? 'is-visible' : 'is-hidden'}`} />
