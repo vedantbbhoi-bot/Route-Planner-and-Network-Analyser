@@ -146,3 +146,46 @@ Contributions are welcome! Please feel free to open an issue or submit a pull re
 ## 📜 License
 
 Distributed under the MIT License. See `LICENSE` for more information.
+
+
+---
+
+## Current frontend demo
+
+The current deliverable is a **frontend-only interactive UI demo**. The FastAPI, NetworkX, PostgreSQL/PostGIS and API sections above describe the proposed full product architecture; those services are not included or connected in this frontend demo. No backend, database or production authentication is configured.
+
+### Run the UI
+
+Prerequisites: Node.js 20.19+ or 22.12+ and pnpm 11.25+.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+Open the local URL printed by Vite (port 3000). To type-check and build the static frontend:
+
+```bash
+pnpm build
+```
+
+### Demo account
+
+The workspace opens with the demo identity **Alex Morgan**. Use the account menu to sign out and open the demo sign-in dialog. The demo values shown there are:
+
+- Email: `demo@routely.app`
+- Password: `route-demo-2026`
+
+This is a public, client-side demonstration only: there is no password verification, account service or access control. The local demo session flag uses browser storage; graph data is bundled with the frontend.
+
+### Included interactions
+
+- A dark, local street-grid canvas with synthetic, labeled graph junctions, weighted links and an interactive map-control rail.
+- Route origin/destination selection, swap controls, map picking and an explicit “Use my location” browser-permission action.
+- Dijkstra, A* and Bellman–Ford shortest-path choices; route costs and graph paths are calculated client-side.
+- Connectivity/component and bridge analysis, Prim/Kruskal minimum spanning trees, and Eulerian path/circuit demonstrations. The graph picker includes connected Eulerian path and circuit samples.
+- Responsive desktop/tablet/mobile dashboard layouts.
+
+The drawn grid and graph are illustrative demo data, **not** a live basemap or verified road network. When the user grants location access, the map recenters the synthetic graph for that session and sets the origin to its nearest sample junction. The location is not sent to an application backend or a third-party tile provider; no backend or database is present. Route costs are graph weights, not live directions, traffic or guaranteed travel times. The assumptions and exact formulas are in [`MATHEMATICS.md`](MATHEMATICS.md).
+
+The UI is not deployed as part of this repository change. No Vercel, Supabase, managed database or backend service has been configured.
